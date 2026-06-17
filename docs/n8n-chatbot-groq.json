@@ -1,0 +1,191 @@
+{
+  "name": "ADSI — Chatbot WhatsApp Business + Groq",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["messages"],
+        "options": {}
+      },
+      "id": "1",
+      "name": "WhatsApp Trigger",
+      "type": "n8n-nodes-base.whatsAppTrigger",
+      "typeVersion": 1,
+      "position": [180, 300],
+      "webhookId": "adsi-whatsapp-trigger",
+      "notes": "Nó nativo do n8n para WhatsApp Business Cloud. Configure as credenciais com: App ID, App Secret, Access Token e Phone Number ID do Meta for Developers."
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json;\n\n// Extrai dados da mensagem recebida pelo WhatsApp Business API\nconst entry = body.entry?.[0];\nconst change = entry?.changes?.[0];\nconst value = change?.value;\n\n// Ignora notificações que não são mensagens de texto\nconst message = value?.messages?.[0];\nif (!message || message.type !== 'text') {\n  return [{ json: { skip: true } }];\n}\n\n// Ignora mensagens enviadas pelo próprio bot\nconst fromMe = message.from === value?.metadata?.phone_number_id;\nif (fromMe) {\n  return [{ json: { skip: true } }];\n}\n\nconst phone = message.from;\nconst messageText = message.text?.body?.trim() || '';\nconst name = value?.contacts?.[0]?.profile?.name || 'usuário';\nconst messageId = message.id;\nconst phoneNumberId = value?.metadata?.phone_number_id;\n\nif (!messageText) {\n  return [{ json: { skip: true } }];\n}\n\nreturn [{\n  json: {\n    phone,\n    name,\n    message: messageText,\n    messageId,\n    phoneNumberId,\n    skip: false\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Extrai dados da mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "3",
+      "name": "É mensagem válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [620, 300],
+      "notes": "Se skip=true (não é texto ou é do bot), encerra o fluxo. Se skip=false, segue para processar."
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "phoneNumberId": "={{ $('Extrai dados da mensagem').first().json.phoneNumberId }}",
+        "recipientPhoneNumber": "={{ $('Extrai dados da mensagem').first().json.phone }}",
+        "textBody": "Olá, {{ $('Extrai dados da mensagem').first().json.name }}! 😊 Recebi sua mensagem e já estou buscando a melhor resposta para você...",
+        "additionalFields": {}
+      },
+      "id": "4",
+      "name": "Envia confirmação de recebimento",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [840, 180],
+      "notes": "Envia uma mensagem imediata para o usuário saber que o bot recebeu. Melhora muito a experiência de quem está esperando."
+    },
+    {
+      "parameters": {
+        "url": "https://adsi-backend.onrender.com/api/tutoriais?categoria=notebook",
+        "options": {}
+      },
+      "id": "5",
+      "name": "Busca tutoriais do ADSI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [840, 340],
+      "notes": "Busca todos os tutoriais do backend ADSI. Ajuste a URL se o backend estiver em outro servidor."
+    },
+    {
+      "parameters": {
+        "jsCode": "const tutoriais = $input.first().json;\n\n// Formata tutoriais em texto compacto para o contexto do LLM\nconst lista = tutoriais.map(t =>\n  `[${t.id}] ${t.titulo}\\nDescrição: ${t.descricao}\\nPassos: ${t.passos.join(' > ')}`\n).join('\\n\\n');\n\nreturn [{ json: { tutoriaisTexto: lista } }];"
+      },
+      "id": "6",
+      "name": "Formata tutoriais para contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "const mensagemUsuario = $('Extrai dados da mensagem').first().json.message;\nconst nomeUsuario = $('Extrai dados da mensagem').first().json.name;\nconst tutoriaisTexto = $('Formata tutoriais para contexto').first().json.tutoriaisTexto;\n\nconst systemPrompt = `Você é o ADSI, um assistente digital criado para ajudar idosos e pessoas com pouca experiência em tecnologia a usarem notebooks e celulares com mais segurança e confiança.\n\nREGRAS DE COMPORTAMENTO:\n- Use linguagem simples, calorosa e paciente — como se fosse um familiar explicando\n- Nunca use termos técnicos sem explicar o que significam\n- Resposta máxima: 5 linhas curtas (o usuário lê no celular)\n- Se identificar o problema do usuário nos tutoriais abaixo, explique os 2 ou 3 passos mais importantes\n- Se não souber responder, diga gentilmente que a pessoa pode pedir ajuda a um familiar ou técnico\n- Sempre termine com uma frase encorajadora\n- Use emojis com moderação para tornar a conversa mais amigável\n- Nunca mencione que é uma IA, a menos que seja diretamente perguntado\n\nTUTORIAIS DISPONÍVEIS NO ADSI:\n${tutoriaisTexto}`;\n\nreturn [{\n  json: {\n    systemPrompt,\n    userMessage: `${nomeUsuario} diz: ${mensagemUsuario}`,\n    nomeUsuario,\n    mensagemOriginal: mensagemUsuario\n  }\n}];"
+      },
+      "id": "7",
+      "name": "Monta prompt com contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 500]
+    },
+    {
+      "parameters": {
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"llama-3.1-8b-instant\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"{{ $json.systemPrompt }}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.userMessage }}\"\n    }\n  ],\n  \"max_tokens\": 400,\n  \"temperature\": 0.4\n}",
+        "options": {}
+      },
+      "id": "8",
+      "name": "Groq — LLaMA 3",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1280, 500],
+      "notes": "Credencial tipo 'Header Auth': Name=Authorization, Value=Bearer gsk_SUA_CHAVE. Chave gratuita em console.groq.com"
+    },
+    {
+      "parameters": {
+        "jsCode": "const groqResponse = $input.first().json;\nconst resposta = groqResponse.choices?.[0]?.message?.content ||\n  'Olá! Não consegui entender bem. Pode explicar com outras palavras? 😊';\n\nreturn [{\n  json: {\n    phone: $('Extrai dados da mensagem').first().json.phone,\n    phoneNumberId: $('Extrai dados da mensagem').first().json.phoneNumberId,\n    name: $('Extrai dados da mensagem').first().json.name,\n    resposta: resposta.trim(),\n    perguntaOriginal: $('Extrai dados da mensagem').first().json.message\n  }\n}];"
+      },
+      "id": "9",
+      "name": "Extrai resposta do Groq",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 500]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "phoneNumberId": "={{ $json.phoneNumberId }}",
+        "recipientPhoneNumber": "={{ $json.phone }}",
+        "textBody": "={{ $json.resposta }}",
+        "additionalFields": {}
+      },
+      "id": "10",
+      "name": "Envia resposta final",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [1720, 500],
+      "notes": "Usa o nó nativo WhatsApp Business Cloud do n8n. Credenciais configuradas uma vez, reutilizadas em todos os nós WhatsApp do fluxo."
+    },
+    {
+      "parameters": {
+        "url": "https://adsi-backend.onrender.com/api/conversas",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"tutorialId\": \"whatsapp-chat\",\n  \"mensagem\": \"[{{ $json.phone }}] {{ $json.perguntaOriginal }}\",\n  \"resposta\": \"{{ $json.resposta }}\"\n}",
+        "options": {}
+      },
+      "id": "11",
+      "name": "Salva conversa no ADSI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1720, 660],
+      "notes": "Salva pergunta e resposta no backend para análise e melhoria contínua do ADSI."
+    }
+  ],
+  "connections": {
+    "WhatsApp Trigger": {
+      "main": [[{ "node": "Extrai dados da mensagem", "type": "main", "index": 0 }]]
+    },
+    "Extrai dados da mensagem": {
+      "main": [[{ "node": "É mensagem válida?", "type": "main", "index": 0 }]]
+    },
+    "É mensagem válida?": {
+      "main": [
+        [],
+        [
+          { "node": "Envia confirmação de recebimento", "type": "main", "index": 0 },
+          { "node": "Busca tutoriais do ADSI", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Busca tutoriais do ADSI": {
+      "main": [[{ "node": "Formata tutoriais para contexto", "type": "main", "index": 0 }]]
+    },
+    "Formata tutoriais para contexto": {
+      "main": [[{ "node": "Monta prompt com contexto", "type": "main", "index": 0 }]]
+    },
+    "Monta prompt com contexto": {
+      "main": [[{ "node": "Groq — LLaMA 3", "type": "main", "index": 0 }]]
+    },
+    "Groq — LLaMA 3": {
+      "main": [[{ "node": "Extrai resposta do Groq", "type": "main", "index": 0 }]]
+    },
+    "Extrai resposta do Groq": {
+      "main": [[
+        { "node": "Envia resposta final", "type": "main", "index": 0 },
+        { "node": "Salva conversa no ADSI", "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
